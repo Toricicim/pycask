@@ -1,55 +1,56 @@
 # PyCask: Binary Key-Value Store
 
-Python ile sıfırdan geliştirilmiş, disk tabanlı ve kalıcı (persistent) bir Anahtar-Değer (Key-Value) veritabanı motoru. Bu proje, Bitcask mimarisinin temel prensibi olan "Log-Structured File System" yapısını anlamak ve uygulamak amacıyla tasarlanmıştır.
+A persistent, disk-based Key-Value database engine developed from scratch in pure Python. This project is designed to demonstrate the fundamental principles of the Bitcask architecture and Log-Structured File Systems.
 
-Veriler disk üzerinde binary (ikili) formatta saklanır ve bellek içi (In-Memory) bir indeks yapısı ile yönetilir.
+Data is stored on the disk in a binary format and managed via an in-memory index, ensuring high-performance data retrieval.
 
-## Özellikler
+## Features
 
-- **Kalıcılık (Persistence):** Veriler diskte "append-only" (sadece ekleme) yöntemiyle saklanır. Program kapatılsa bile veriler korunur.
-- **Yüksek Performans:** RAM üzerinde tutulan Hash Index sayesinde okuma işlemleri O(1) karmaşıklığında gerçekleşir.
-- **Binary Protokol:** Veriler CSV veya metin formatında değil, `struct` modülü kullanılarak binary formatta paketlenir. Bu sayede veri içinde geçen özel karakterler (virgül, yeni satır vb.) bozulmaya yol açmaz.
-- **Otomatik Kurtarma (Recovery):** Veritabanı başlatıldığında, diskteki veri dosyası taranarak indeks haritası otomatik olarak yeniden oluşturulur.
-- **Bağımlılık Yok:** Harici hiçbir kütüphane kullanılmamıştır, sadece Python Standart Kütüphanesi (`struct`, `os`) ile yazılmıştır.
+- **Persistence:** Data is stored using an "append-only" strategy. Data remains persistent and safe even after the program terminates or crashes.
+- **High Performance:** Utilizes an in-memory Hash Index to track byte offsets, achieving **O(1)** time complexity for read operations.
+- **Binary Protocol:** Unlike text-based formats (like CSV), data is serialized and packed using Python's `struct` module. This ensures safe handling of arbitrary binary data and special characters.
+- **Crash Recovery:** Upon initialization, the database scans the existing data file to reconstruct the in-memory index map automatically.
+- **Zero Dependencies:** Built entirely using the Python Standard Library (`struct`, `os`). No external packages required.
 
-## Mimari
+## Architecture
 
-Bu veritabanı motoru iki ana bileşenden oluşur:
+The engine consists of two main components:
 
-1.  **Disk Depolama (Data File):** Veriler diske sıralı olarak yazılır. Her kayıt şu binary formata sahiptir:
-    `[Key Size (4 Byte)] [Value Size (4 Byte)] [Key Data] [Value Data]`
-    
-2.  **Bellek İndeksi (KeyDir):** Python'un yerleşik sözlük yapısı (Hash Map) kullanılarak anahtarların diskteki byte ofsetleri (başlangıç konumları) RAM'de tutulur.
+1.  **Disk Storage (Data File):** Records are appended sequentially to the file. Each entry follows this binary layout:
+    `[Key Size (4 Bytes)] [Value Size (4 Bytes)] [Key Data] [Value Data]`
 
-## Kurulum
+2.  **Memory Index (KeyDir):** A Python dictionary (Hash Map) is maintained in RAM, mapping every key to its exact byte offset (location) in the disk file.
 
-Bu proje herhangi bir harici paket kurulumu gerektirmez. Python 3.x yüklü olması yeterlidir.
+## Installation
 
-Projeyi klonlayın:
+No external package installation is required. Python 3.x is sufficient.
 
-git clone https://github.com/KULLANICI_ADIN/py-bitcask-db.git
+Clone the repository:
+
+git clone https://github.com/YOUR_USERNAME/py-bitcask-db.git
 cd py-bitcask-db
 
-## Kullanım
+## Usage
 
-Veritabanını projenize dahil etmek ve kullanmak için aşağıdaki örneği inceleyebilirsiniz:
+You can import the `DB` class into your project as shown below:
 
 ```python
 from db import DB
 
-# Veritabanını başlat (Dosya yoksa oluşturulur, varsa indeks yüklenir)
+# Initialize the database
+# (Creates the file if it doesn't exist; loads the index if it does)
 db = DB()
 
-# Veri Yazma
-# Anahtar ve değer string tipinde olmalıdır.
-db.yaz("kullanici_id", "10245")
-db.yaz("kullanici_adi", "ahmet_yilmaz")
-print("Veriler diske yazıldı.")
+# Writing Data
+# Keys and values must be strings (automatically encoded to bytes)
+db.yaz("user_id", "10245")
+db.yaz("username", "johndoe")
+print("Data written to disk.")
 
-# Veri Okuma
-# O(1) hızında diskten okuma yapar.
-gelen_veri = db.oku("kullanici_adi")
-print(f"Okunan Değer: {gelen_veri}")
+# Reading Data
+# Retrieves data directly from disk using the offset (O(1) speed)
+data = db.oku("username")
+print(f"Retrieved Value: {data}")
 
-# Olmayan veri sorgusu None döner
-sonuc = db.oku("olmayan_anahtar")
+# Querying non-existent data returns None
+result = db.oku("non_existent_key")
