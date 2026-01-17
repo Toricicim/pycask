@@ -1,7 +1,5 @@
 import struct
 
-from binary_lab import k_len, key_bytes, tam_veri, v_len, value_bytes
-
 class DB:
     def __init__(self) -> None:
         self.dosya = open("database.data","ab+")
