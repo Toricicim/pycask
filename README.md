@@ -1,56 +1,87 @@
-# PyCask: Binary Key-Value Store
+# PyCask: RESTful Bitcask Key-Value Store
 
-A persistent, disk-based Key-Value database engine developed from scratch in pure Python. This project is designed to demonstrate the fundamental principles of the Bitcask architecture and Log-Structured File Systems.
+PyCask is a persistent, disk-based Key-Value database engine written from scratch in pure Python, wrapped in a high-performance asynchronous REST API using FastAPI. 
 
-Data is stored on the disk in a binary format and managed via an in-memory index, ensuring high-performance data retrieval.
+It is built upon the foundational principles of the Bitcask architecture (Log-Structured Hash Table), offering an append-only disk storage mechanism combined with an in-memory Hash Index for **O(1) read performance**.
 
 ## Features
 
-- **Persistence:** Data is stored using an "append-only" strategy. Data remains persistent and safe even after the program terminates or crashes.
-- **High Performance:** Utilizes an in-memory Hash Index to track byte offsets, achieving **O(1)** time complexity for read operations.
-- **Binary Protocol:** Unlike text-based formats (like CSV), data is serialized and packed using Python's `struct` module. This ensures safe handling of arbitrary binary data and special characters.
-- **Crash Recovery:** Upon initialization, the database scans the existing data file to reconstruct the in-memory index map automatically.
-- **Zero Dependencies:** Built entirely using the Python Standard Library (`struct`, `os`). No external packages required.
+- **Persistence:** Uses an append-only file format. Data remains safe and persistent across server restarts.
+- **High Read Performance:** An in-memory Hash Index tracks byte offsets, allowing single disk seek operations for data retrieval.
+- **Thread-Safety:** Disk I/O operations are safeguarded using explicit locking mechanisms, enabling safe concurrent read/write operations from multiple API clients.
+- **Microservice Ready:** Served over HTTP via FastAPI, making it accessible from any language as a standalone key-value cache/store.
+- **Compaction Engine:** Includes an endpoint to merge and compact the append-only logs, removing deleted entries and recovering physical disk space.
 
-## Architecture
+## Architecture & State
 
-The engine consists of two main components:
+1. **Storage Layer (`bitcask.py`):** Handles all binary packing (`struct`), byte offset management, sequential disk writes, and concurrency locks.
+2. **Network Layer (`main.py`):** Exposes the database engine via a RESTful JSON API. The database instance is injected as a Singleton into the ASGI event loop, ensuring the memory index persists across HTTP requests.
 
-1.  **Disk Storage (Data File):** Records are appended sequentially to the file. Each entry follows this binary layout:
-    `[Key Size (4 Bytes)] [Value Size (4 Bytes)] [Key Data] [Value Data]`
+## Installation & Setup
 
-2.  **Memory Index (KeyDir):** A Python dictionary (Hash Map) is maintained in RAM, mapping every key to its exact byte offset (location) in the disk file.
+It is recommended to run the project inside an isolated virtual environment.
 
-## Installation
+```bash
+# 1. Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-No external package installation is required. Python 3.x is sufficient.
+# 2. Install dependencies
+pip install fastapi uvicorn requests
 
-Clone the repository:
+# 3. Start the API server
+uvicorn main:app --reload
+```
 
-git clone https://github.com/YOUR_USERNAME/py-bitcask-db.git
-cd py-bitcask-db
+## API Reference
 
-## Usage
+The API runs on `http://127.0.0.1:8000` by default. You can view the interactive Swagger UI at `/docs`.
 
-You can import the `DB` class into your project as shown below:
+### 1. Write / Update Key
+**`PUT /keys/{key}`**
+```bash
+curl -X PUT "[http://127.0.0.1:8000/keys/my_key](http://127.0.0.1:8000/keys/my_key)" \
+     -H "Content-Type: application/json" \
+     -d '{"value": "Hello PyCask!"}'
+```
 
-```python
-from db import DB
+### 2. Read Key
+**`GET /keys/{key}`**
+```bash
+curl -X GET "[http://127.0.0.1:8000/keys/my_key](http://127.0.0.1:8000/keys/my_key)"
+```
 
-# Initialize the database
-# (Creates the file if it doesn't exist; loads the index if it does)
-db = DB()
+### 3. Delete Key
+**`DELETE /keys/{key}`**
+```bash
+# Uses Tombstone mechanism under the hood
+curl -X DELETE "[http://127.0.0.1:8000/keys/my_key](http://127.0.0.1:8000/keys/my_key)"
+```
 
-# Writing Data
-# Keys and values must be strings (automatically encoded to bytes)
-db.yaz("user_id", "10245")
-db.yaz("username", "johndoe")
-print("Data written to disk.")
+### 4. Run Compaction
+**`POST /compact`**
+```bash
+# Compresses the log file and clears physical space of deleted items
+curl -X POST "[http://127.0.0.1:8000/compact](http://127.0.0.1:8000/compact)"
+```
 
-# Reading Data
-# Retrieves data directly from disk using the offset (O(1) speed)
-data = db.oku("username")
-print(f"Retrieved Value: {data}")
+## Benchmarking & Load Testing
 
-# Querying non-existent data returns None
-result = db.oku("non_existent_key")
+A client script is included to simulate concurrent traffic and measure the throughput/latency of the engine.
+
+While the server is running, execute the load test in a separate terminal:
+
+```bash
+python load_test.py
+```
+
+**Sample Output on standard hardware:**
+```text
+--- LOAD TEST RESULTS ---
+Total records written: 1000
+Total time elapsed: 0.95 seconds
+Write Throughput: 1056.11 req/sec
+
+Verification: Reading user:506 from memory (O(1))...
+Read latency: 1.06 ms
+```

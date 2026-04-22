@@ -1,75 +1,91 @@
 import struct
+import threading
+import os
+
 
 class DB:
     def __init__(self) -> None:
-        self.dosya = open("database.data","ab+")
+        self.filepath = "database.data"
+        self.write_lock = threading.Lock()
         self.index = {}
-        
-        self.yukle()
 
-    def yaz(self,key,value):
+        # Create an empty file if it doesn't exist to prevent read errors
+        if not os.path.exists(self.filepath):
+            open(self.filepath, "wb").close()
+
+        # Append-only file handle for write operations
+        self.file = open(self.filepath, "ab+")
+        self.load()
+
+    def put(self, key: str, value: str):
         key_bytes = key.encode("utf-8")
         val_bytes = value.encode("utf-8")
 
         key_len = len(key_bytes)
         val_len = len(val_bytes)
 
-        # Packet:
-        header = struct.pack("II",key_len,val_len)
-        tam_veri = header + key_bytes + val_bytes
-        
-        konum = self.dosya.tell()
-        self.dosya.write(tam_veri)
-        self.dosya.flush()
+        header = struct.pack("II", key_len, val_len)
+        record = header + key_bytes + val_bytes
 
-        self.index[key] = konum
+        with self.write_lock:
+            offset = self.file.tell()
+            self.file.write(record)
+            self.file.flush()
+            self.index[key] = offset
 
-    def oku(self,key):
+    def get(self, key: str):
         if key not in self.index:
             return None
 
-        konum = self.index[key]
-        self.dosya.seek(konum)
+        offset = self.index[key]
 
-        header_data = self.dosya.read(8)
+        # Thread-safe read: Each read operation uses its own file descriptor
+        with open(self.filepath, "rb") as f:
+            f.seek(offset)
+            header_data = f.read(8)
+            key_len, val_len = struct.unpack("II", header_data)
 
-        key_len, val_len = struct.unpack("II",header_data)
-        
-        self.dosya.read(key_len)
-        value_bytes = self.dosya.read(val_len)
+            f.read(key_len)  # Skip the key, read only the value
+            value_bytes = f.read(val_len)
 
         return value_bytes.decode("utf-8")
 
-    def yukle(self):
-        self.dosya.seek(0)
+    def delete(self, key: str):
+        with self.write_lock:
+            if key not in self.index:
+                return False
 
-        while True:
-            baslangic_konum = self.dosya.tell()
+            key_bytes = key.encode("utf-8")
+            val_bytes = b"__DELETED__"
 
-            header_data = self.dosya.read(8)
-            if len(header_data) < 8:
-                break
+            key_len = len(key_bytes)
+            val_len = len(val_bytes)
 
-            
-            key_len, val_len = struct.unpack("II",header_data)
-            key_bytes = self.dosya.read(key_len)
-            self.dosya.read(val_len)
-            key = key_bytes.decode(("utf-8"))
+            header = struct.pack("II", key_len, val_len)
+            record = header + key_bytes + val_bytes
 
-            self.index[key] = baslangic_konum
+            self.file.write(record)
+            self.file.flush()
+            del self.index[key]
+            return True
 
-db = DB()
+    def load(self):
+        with open(self.filepath, "rb") as f:
+            while True:
+                start_offset = f.tell()
+                header_data = f.read(8)
 
-print("Girdiler:")
-db.yaz("kullanici_1", "Ali")
-db.yaz("kullanici_2", "Veli")
+                if len(header_data) < 8:
+                    break
 
-print("Okunuyor")
-gelen_veri = db.oku("kullanici_1")
-print(f"kullanici_1: {gelen_veri}")
-print(f"kullanici_1 için veritabanından gelen değer: {gelen_veri}")
+                key_len, val_len = struct.unpack("II", header_data)
+                key_bytes = f.read(key_len)
+                value_bytes = f.read(val_len)
 
-print(f"Olmayan veri testi: {db.oku("mehmet")}")
+                key = key_bytes.decode("utf-8")
 
-print("--- Hafıza Testi ---")
-print(f"kullanici_1: {db.oku('kullanici_2')}")
+                if value_bytes == b"__DELETED__":
+                    if key in self.index:
+                        del self.index[key]
+                else:
+                    self.index[key] = start_offset
