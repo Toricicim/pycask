@@ -69,6 +69,40 @@ class DB:
             del self.index[key]
             return True
 
+    def compact(self):
+        compact_filepath = self.filepath + ".compact"
+        new_index = {}
+
+        with self.write_lock:
+            with open(compact_filepath, "wb") as f_new:
+                # We iterate over the current index to only keep the latest values
+                for key, offset in self.index.items():
+                    # Read current value
+                    val = self.get(key)
+                    if val is None:
+                        continue
+                    
+                    key_bytes = key.encode("utf-8")
+                    val_bytes = val.encode("utf-8")
+                    
+                    key_len = len(key_bytes)
+                    val_len = len(val_bytes)
+                    
+                    header = struct.pack("II", key_len, val_len)
+                    record = header + key_bytes + val_bytes
+                    
+                    new_offset = f_new.tell()
+                    f_new.write(record)
+                    new_index[key] = new_offset
+            
+            # Close current file and replace it
+            self.file.close()
+            os.replace(compact_filepath, self.filepath)
+            
+            # Reopen the file handle and update index
+            self.file = open(self.filepath, "ab+")
+            self.index = new_index
+
     def load(self):
         with open(self.filepath, "rb") as f:
             while True:

@@ -48,3 +48,10 @@ def delete_key(key: str, db: DB = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="Key not found")
     return None
+
+
+# COMPACTION UÇ NOKTASI
+@app.post("/compact", status_code=status.HTTP_200_OK)
+def compact_db(db: DB = Depends(get_db)):
+    db.compact()
+    return {"message": "Compaction completed successfully"}
