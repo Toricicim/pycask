@@ -10,6 +10,8 @@ __pycache__/
 database.data
 database.data.compact
 *.data
+*.v1.bak
+*.compact
 
 pycask_zip.zip
 *.zip

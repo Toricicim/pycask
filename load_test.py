@@ -1,57 +1,88 @@
-import requests
-import time
+"""Concurrent HTTP load test with full read-back verification."""
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
-import random
+import statistics
+import time
+import uuid
 
-BASE_URL = "http://127.0.0.1:8000"
-RECORD_COUNT = 1000
+import requests
 
-cities = ["Ankara", "Istanbul", "Izmir", "Bursa", "Antalya"]
-professions = ["Engineer", "Statistician", "Designer", "Student", "Musician"]
 
-print(f"Generating {RECORD_COUNT} records and sending to API. Please wait...")
+def run_load_test(base_url, records, workers, timeout):
+    if records < 1 or workers < 1 or timeout <= 0:
+        raise ValueError("records, workers and timeout must be positive")
+    base_url = base_url.rstrip("/")
+    # Avoid overwriting an earlier run's keys or accidentally verifying stale data.
+    prefix = "loadtest:" + uuid.uuid4().hex
+    payloads = [
+        (f"{prefix}:{i}", json.dumps({"id": i, "name": f"User_{i}"}))
+        for i in range(records)
+    ]
 
-start_time = time.time()
+    def write(item):
+        key, value = item
+        start = time.perf_counter()
+        try:
+            response = requests.put(f"{base_url}/keys/{key}", json={"value": value}, timeout=timeout)
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError(f"Unexpected write status: {response.status_code}")
+            return item, time.perf_counter() - start, None
+        except (requests.RequestException, ValueError) as exc:
+            return item, time.perf_counter() - start, str(exc)
 
-for i in range(1, RECORD_COUNT + 1):
-    key = f"user:{i}"
+    def verify(item):
+        key, expected = item
+        try:
+            response = requests.get(f"{base_url}/keys/{key}", timeout=timeout)
+            response.raise_for_status()
+            if response.json() != {"key": key, "value": expected}:
+                return f"Value mismatch for {key}"
+        except (requests.RequestException, ValueError) as exc:
+            return str(exc)
+        return None
 
-    mock_data = {
-        "id": i,
-        "name": f"User_{i}",
-        "age": random.randint(18, 65),
-        "city": random.choice(cities),
-        "profession": random.choice(professions),
-        "score": round(random.uniform(10.0, 99.9), 2),
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        start = time.perf_counter()
+        results = list(pool.map(write, payloads))
+        elapsed = time.perf_counter() - start
+        successful = [(item, latency) for item, latency, error in results if error is None]
+        verification_errors = list(pool.map(verify, [item for item, _ in successful]))
+
+    latencies = sorted(latency * 1000 for _, latency in successful)
+    write_errors = [error for _, _, error in results if error is not None]
+    failed_reads = [error for error in verification_errors if error is not None]
+    return {
+        "attempted": records,
+        "workers": workers,
+        "successful_writes": len(successful),
+        "failed_writes": len(write_errors),
+        "verified_reads": len(successful) - len(failed_reads),
+        "failed_verifications": len(failed_reads),
+        "write_seconds": elapsed,
+        "successful_writes_per_second": len(successful) / elapsed,
+        "write_latency_median_ms": statistics.median(latencies) if latencies else None,
+        "write_latency_p95_ms": latencies[max(0, (95 * len(latencies) + 99) // 100 - 1)] if latencies else None,
+        "sample_errors": (write_errors + failed_reads)[:5],
+        "key_prefix": prefix,
     }
 
-    payload = {"value": json.dumps(mock_data)}
 
-    response = requests.put(f"{BASE_URL}/keys/{key}", json=payload)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--records", type=int, default=1000)
+    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--timeout", type=float, default=10)
+    args = parser.parse_args()
+    if args.records < 1 or args.workers < 1 or args.timeout <= 0:
+        parser.error("records, workers and timeout must be positive")
+    result = run_load_test(args.base_url, args.records, args.workers, args.timeout)
+    print(json.dumps(result, indent=2))
+    return 1 if result["failed_writes"] or result["failed_verifications"] else 0
 
-    if response.status_code != 200:
-        print(f"Error: Could not write {key}. Status code: {response.status_code}")
 
-end_time = time.time()
-elapsed_time = end_time - start_time
-
-print(f"\n--- LOAD TEST RESULTS ---")
-print(f"Total records written: {RECORD_COUNT}")
-print(f"Total time elapsed: {elapsed_time:.2f} seconds")
-print(f"Write Throughput: {RECORD_COUNT / elapsed_time:.2f} req/sec")
-
-# Random read verification
-test_id = random.randint(1, RECORD_COUNT)
-test_key = f"user:{test_id}"
-
-print(f"\nVerification: Reading {test_key} from memory (O(1))...")
-read_start = time.time()
-get_response = requests.get(f"{BASE_URL}/keys/{test_key}")
-read_end = time.time()
-
-if get_response.status_code == 200:
-    retrieved_data = get_response.json()
-    print(f"Retrieved Value: {retrieved_data['value']}")
-    print(f"Read latency: {(read_end - read_start) * 1000:.2f} ms")
-else:
-    print(f"Read error! Status code: {get_response.status_code}")
+if __name__ == "__main__":
+    raise SystemExit(main())

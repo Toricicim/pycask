@@ -1,18 +1,28 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from contextlib import asynccontextmanager
+import os
+
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from bitcask import DB
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    with DB(os.environ.get("PYCASK_DATA_FILE", "database.data")) as db:
+        app.state.db = db
+        yield
+
 
 app = FastAPI(
     title="PyCask REST API",
     description="A Bitcask-based Key-Value database engine written in Python.",
-    version="1.0.0",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
-pycask_engine = DB()
 
-
-def get_db() -> DB:
-    return pycask_engine
+def get_db(request: Request) -> DB:
+    return request.app.state.db
 
 
 # İstemciden gelecek JSON formatı: {"value": "herhangi_bir_deger"}
@@ -22,7 +32,8 @@ class KeyValuePayload(BaseModel):
 
 @app.get("/")
 def health_check(db: DB = Depends(get_db)):
-    return {"status": "online", "engine": "PyCask", "indexed_keys_count": len(db.index)}
+    with db.write_lock:
+        return {"status": "online", "engine": "PyCask", "indexed_keys_count": len(db.index)}
 
 
 # YAZMA / GÜNCELLEME UÇ NOKTASI
@@ -47,7 +58,7 @@ def delete_key(key: str, db: DB = Depends(get_db)):
     success = db.delete(key)
     if not success:
         raise HTTPException(status_code=404, detail="Key not found")
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # COMPACTION UÇ NOKTASI
